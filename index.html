@@ -179,7 +179,6 @@
 
             const registrarNoFiado = (venda, telefone, pagamentos) => {
                 const valorFiado = pagamentos.filter(p => p.forma === "Fiado").reduce((acc, p) => acc + parseFloat(p.valor), 0);
-                const valorPagoNoAto = pagamentos.filter(p => p.forma !== "Fiado").reduce((acc, p) => acc + parseFloat(p.valor), 0);
                 
                 if(!clientesFiado.find(c => c.nome === venda.cliente)) {
                     setClientesFiado([...clientesFiado, { id: Date.now(), nome: venda.cliente, telefone: telefone }]);
@@ -194,7 +193,6 @@
                     valorTotal: venda.valor,
                     valorFiado: valorFiado,
                     valorPago: 0,
-                    valorPagoNoAto: valorPagoNoAto,
                     status: 'Não pago',
                     itens: venda.isMulti ? venda.itens : [{nome: venda.nome, valor: venda.valor}],
                     pagamentosOriginais: pagamentos
@@ -216,14 +214,6 @@
                 setCarrinhoGlobal([...carrinhoGlobal, produto]);
             };
 
-            const handleAbaCaixaClick = () => {
-                if (carrinhoGlobal.length > 0) {
-                    setModal({ type: 'decisao_carrinho' });
-                } else {
-                    setAbaAtiva('caixa');
-                }
-            };
-
             if (!userLogado) {
                 return <TelaLogin onLogin={handleLogin} funcionarios={funcionarios} />;
             }
@@ -243,7 +233,20 @@
                         
                         <div className="flex bg-zinc-900 p-1 rounded-2xl border border-zinc-800">
                             {temAcesso('catalogo') && <button onClick={() => setAbaAtiva('catalogo')} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'catalogo' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Catálogo</button>}
-                            {temAcesso('caixa') && <button onClick={handleAbaCaixaClick} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'caixa' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Caixa {carrinhoGlobal.length > 0 && <span className="bg-soft-red text-white text-[10px] px-2 py-0.5 rounded-full ml-1">{carrinhoGlobal.length}</span>}</button>}
+                            {temAcesso('caixa') && (
+                                <button 
+                                    onClick={() => {
+                                        if (carrinhoGlobal.length > 0) {
+                                            setModal({ type: 'decisao_carrinho' });
+                                        } else {
+                                            setAbaAtiva('caixa');
+                                        }
+                                    }} 
+                                    className={`px-4 py-2 rounded-xl font-bold transition text-xs relative ${abaAtiva === 'caixa' ? 'bg-maizena text-black' : 'text-zinc-500'}`}
+                                >
+                                    Caixa {carrinhoGlobal.length > 0 && <span className="absolute -top-2 -right-2 bg-soft-red text-white text-[10px] px-2 py-0.5 rounded-full border-2 border-black animate-bounce">{carrinhoGlobal.length}</span>}
+                                </button>
+                            )}
                             <button onClick={() => setAbaAtiva('fiado')} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'fiado' ? 'bg-orange-500 text-white' : 'text-zinc-500'}`}>📒 Fiado</button>
                             {temAcesso('resumo') && <button onClick={() => setAbaAtiva('resumo')} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'resumo' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Resumo</button>}
                             {(temAcesso('metas') || temAcesso('comissao')) && <button onClick={() => setAbaAtiva('metas')} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'metas' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Metas</button>}
@@ -280,7 +283,7 @@
                             </div>
                         )}
                         {abaAtiva === 'caixa' && <ModuloCaixa produtos={produtos} funcionarios={funcionarios} onFinalizar={handleFinalizarCaixa} clientesFiado={clientesFiado} itensIniciais={carrinhoGlobal} clearIniciais={() => setCarrinhoGlobal([])} />}
-                        {abaAtiva === 'fiado' && <ModuloFiado historico={historicoFiado} setHistorico={setHistoricoFiado} clientes={clientesFiado} setClientes={setClientesFiado} />}
+                        {abaAtiva === 'fiado' && <ModuloFiado historico={historicoFiado} setHistorico={setHistoricoFiado} clientes={clientesFiado} setClientes={setClientesFiado} config={config} />}
                         {abaAtiva === 'resumo' && <ResumoDiario vendas={vendas} config={config} user={userLogado} />}
                         {abaAtiva === 'metas' && <ModuloMetas user={userLogado} vendas={vendas} funcionarios={funcionarios} />}
                         {abaAtiva === 'admin' && <ModuloADM funcionarios={funcionarios} setFuncionarios={setFuncionarios} onEditFunc={(f) => setModal({type: 'editFunc', data: f})} onAddFunc={() => setModal({type: 'editFunc', data: null})} onConfig={() => setModal({type: 'config'})} />}
@@ -294,8 +297,9 @@
                     {modal.type === 'config' && <ModalConfig config={config} onSave={setConfig} onClose={() => setModal({type: null})} />}
                     {modal.type === 'decisao_carrinho' && (
                         <ModalDecisaoCarrinho 
-                            onCancel={() => setModal({type: null})} 
-                            onConfirm={() => { setModal({type: null}); setAbaAtiva('caixa'); }} 
+                            onFinalizar={() => { setAbaAtiva('caixa'); setModal({type: null}); }} 
+                            onContinuar={() => setModal({type: null})} 
+                            onLimpar={() => { setCarrinhoGlobal([]); setModal({type: null}); }}
                         />
                     )}
                     {modal.type === 'estorno_lista' && (
@@ -500,17 +504,20 @@
             <div className="bg-maizena rounded-[2.5rem] overflow-hidden h-[500px] relative group shadow-2xl">
                 <img src={produto.imagem || 'https://images.unsplash.com/photo-1523381210434-271e8be1f52b?auto=format&fit=crop&q=80&w=400'} className="w-full h-full object-cover transition duration-500 group-hover:scale-110" />
                 <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80" />
+                
                 <div className="absolute top-4 left-4">
                     <button onClick={onAddToCart} className="bg-tech-green p-4 rounded-full text-black shadow-xl hover:scale-110 transition active:scale-95">
                         <Icon name="shopping-cart" size={24}/>
                     </button>
                 </div>
+
                 {podeEditar && (
                     <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
                         <button onClick={onEdit} className="bg-black/50 backdrop-blur-md text-white p-2 rounded-full hover:bg-black"><Icon name="edit-3" size={16}/></button>
                         <button onClick={onDelete} className="bg-soft-red/80 backdrop-blur-md text-white p-2 rounded-full hover:bg-soft-red"><Icon name="x" size={16}/></button>
                     </div>
                 )}
+
                 <div className="absolute bottom-0 left-0 right-0 p-6">
                     <div className="flex justify-between items-end mb-4">
                         <div className="bg-black/80 backdrop-blur-md p-4 rounded-3xl border border-white/10 max-w-[70%]">
@@ -696,61 +703,57 @@
             );
         };
 
-        const ModalDecisaoCarrinho = ({ onCancel, onConfirm }) => (
-            <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4">
+        const ModalDecisaoCarrinho = ({ onFinalizar, onContinuar, onLimpar }) => (
+            <div className="fixed inset-0 bg-black/95 z-[100] flex items-center justify-center p-4">
                 <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-sm text-center shadow-2xl">
                     <div className="w-20 h-20 bg-maizena/20 text-maizena rounded-full flex items-center justify-center mx-auto mb-6">
                         <Icon name="shopping-cart" size={40} />
                     </div>
-                    <h2 className="text-xl font-black text-white uppercase italic mb-2">Carrinho Ativo</h2>
-                    <p className="text-zinc-400 text-sm font-bold mb-8 uppercase tracking-widest">Deseja finalizar os itens selecionados e ir para o caixa?</p>
+                    <h2 className="text-xl font-black text-white uppercase italic mb-2">Seu Carrinho</h2>
+                    <p className="text-zinc-400 text-sm font-bold mb-8 uppercase tracking-widest">O que deseja fazer agora?</p>
                     <div className="space-y-3">
-                        <button onClick={onConfirm} className="w-full bg-tech-green text-black py-4 rounded-2xl font-black text-xs uppercase hover:scale-105 transition">Sim, Ir para o Caixa</button>
-                        <button onClick={onCancel} className="w-full bg-zinc-800 text-white py-4 rounded-2xl font-black text-xs uppercase hover:bg-zinc-700 transition">Não, Continuar Comprando</button>
+                        <button onClick={onFinalizar} className="w-full bg-tech-green text-black py-4 rounded-2xl font-black text-xs uppercase hover:scale-105 transition">Finalizar no Caixa</button>
+                        <button onClick={onContinuar} className="w-full bg-zinc-800 text-white py-4 rounded-2xl font-black text-xs uppercase hover:bg-zinc-700 transition">Continuar Comprando</button>
+                        <button onClick={onLimpar} className="w-full text-soft-red text-[10px] font-black uppercase pt-2">Limpar Carrinho</button>
                     </div>
                 </div>
             </div>
         );
 
-        const ModuloFiado = ({ historico, setHistorico, clientes, setClientes }) => {
+        const ModuloFiado = ({ historico, setHistorico, clientes, setClientes, config }) => {
             const [aba, setAba] = useState('pendentes');
             const [filtro, setFiltro] = useState('');
             const [extratoImpressao, setExtratoImpressao] = useState(null);
+            const [menuAberto, setMenuAberto] = useState(null);
 
-            const filtered = historico.filter(h => 
-                (aba === 'pendentes' ? h.status !== 'Pago' : h.status === 'Pago') &&
-                (h.cliente.toLowerCase().includes(filtro.toLowerCase()))
-            );
+            const filtered = historico.filter(h => {
+                const matchFiltro = h.cliente.toLowerCase().includes(filtro.toLowerCase());
+                if (aba === 'pendentes') return h.status !== 'Pago' && matchFiltro;
+                if (aba === 'pagos') return h.status === 'Pago' && matchFiltro;
+                return matchFiltro;
+            });
+
+            const totalAberto = historico
+                .filter(h => h.status !== 'Pago')
+                .reduce((acc, h) => acc + (h.valorFiado - h.valorPago), 0);
 
             const handlePagamento = (id, valor) => {
                 setHistorico(historico.map(h => {
                     if(h.id === id) {
                         const novoPago = h.valorPago + parseFloat(valor);
-                        return { 
-                            ...h, 
-                            valorPago: novoPago, 
-                            status: novoPago >= h.valorFiado ? 'Pago' : 'Parcial' 
-                        };
+                        const status = novoPago >= h.valorFiado ? 'Pago' : 'Parcial';
+                        return { ...h, valorPago: novoPago, status };
                     }
                     return h;
                 }));
             };
 
-            const prepararImpressao = (clienteNome) => {
-                const clienteObj = clientes.find(c => c.nome === clienteNome);
-                const itensCliente = historico.filter(h => h.cliente === clienteNome);
-                const totalFiado = itensCliente.reduce((acc, h) => acc + h.valorFiado, 0);
-                const totalPago = itensCliente.reduce((acc, h) => acc + h.valorPago, 0);
-                const totalRestante = totalFiado - totalPago;
-                
+            const prepararImpressao = (h) => {
                 setExtratoImpressao({
-                    cliente: clienteObj,
-                    compras: itensCliente,
-                    totalFiado,
-                    totalPago,
-                    totalRestante
+                    config,
+                    h,
+                    dataImpressao: new Date().toLocaleString()
                 });
-                
                 setTimeout(() => {
                     window.print();
                     setExtratoImpressao(null);
@@ -759,107 +762,136 @@
 
             return (
                 <div className="max-w-5xl mx-auto">
-                    <div className="flex justify-between items-center mb-10">
-                        <h2 className="text-4xl font-black italic uppercase text-white">Controle de Fiado</h2>
+                    <div className="flex flex-wrap justify-between items-center mb-10 gap-6">
+                        <div>
+                            <h2 className="text-4xl font-black italic uppercase text-white tracking-tighter">📒 Catálogo de Fiado</h2>
+                            <p className="text-orange-500 font-black text-xs uppercase tracking-widest mt-1">Total em Aberto: R$ {totalAberto.toFixed(2)}</p>
+                        </div>
                         <div className="flex bg-zinc-900 p-1 rounded-2xl border border-zinc-800">
                             <button onClick={() => setAba('pendentes')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition ${aba === 'pendentes' ? 'bg-orange-500 text-white' : 'text-zinc-500'}`}>Pendentes</button>
-                            <button onClick={() => setAba('pagos')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition ${aba === 'pagos' ? 'bg-tech-green text-black' : 'text-zinc-500'}`}>Histórico de Pagos</button>
+                            <button onClick={() => setAba('pagos')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition ${aba === 'pagos' ? 'bg-tech-green text-black' : 'text-zinc-500'}`}>Pagos</button>
+                            <button onClick={() => setAba('clientes')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition ${aba === 'clientes' ? 'bg-white text-black' : 'text-zinc-500'}`}>Clientes</button>
                         </div>
                     </div>
 
-                    <input value={filtro} onChange={e => setFiltro(e.target.value)} placeholder="Pesquisar por nome do cliente..." className="w-full bg-zinc-900 border border-zinc-800 p-5 rounded-3xl text-white font-bold outline-none mb-8 focus:border-orange-500" />
-
-                    <div className="grid gap-4">
-                        {filtered.map(h => (
-                            <div key={h.id} className="bg-zinc-900 border border-zinc-800 p-6 rounded-[32px] flex flex-wrap justify-between items-center gap-6">
-                                <div>
-                                    <p className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-1">{new Date(h.data).toLocaleDateString('pt-BR')} - {new Date(h.data).toLocaleTimeString('pt-BR')}</p>
-                                    <h3 className="text-xl font-black text-white uppercase italic">{h.cliente}</h3>
-                                    <p className="text-zinc-500 text-xs font-bold uppercase">{h.telefone}</p>
-                                </div>
-
-                                <div className="flex-1 min-w-[200px] bg-black/40 p-4 rounded-2xl border border-zinc-800">
-                                    <p className="text-[9px] font-black text-zinc-500 uppercase mb-2">Resumo da Dívida</p>
-                                    <div className="flex justify-between">
-                                        <div>
-                                            <p className="text-[9px] font-bold text-zinc-600 uppercase">Total</p>
-                                            <p className="font-black text-white">R$ {h.valorFiado.toFixed(2)}</p>
-                                        </div>
-                                        <div className="text-center">
-                                            <p className="text-[9px] font-bold text-zinc-600 uppercase">Pago</p>
-                                            <p className="font-black text-tech-green">R$ {h.valorPago.toFixed(2)}</p>
-                                        </div>
-                                        <div className="text-right">
-                                            <p className="text-[9px] font-bold text-zinc-600 uppercase">Restante</p>
-                                            <p className="font-black text-soft-red">R$ {(h.valorFiado - h.valorPago).toFixed(2)}</p>
-                                        </div>
-                                    </div>
-                                </div>
-
-                                <div className="flex gap-2">
-                                    <button onClick={() => prepararImpressao(h.cliente)} className="p-4 bg-zinc-800 text-white rounded-2xl hover:bg-zinc-700 transition" title="Imprimir Extrato">
-                                        <Icon name="printer" size={20}/>
-                                    </button>
-                                    {h.status !== 'Pago' && (
-                                        <button onClick={() => {
-                                            const val = prompt("Valor do pagamento:", (h.valorFiado - h.valorPago).toFixed(2));
-                                            if(val) handlePagamento(h.id, val);
-                                        }} className="bg-tech-green text-black px-6 py-4 rounded-2xl font-black text-xs uppercase hover:scale-105 transition">Dar Baixa</button>
-                                    )}
-                                </div>
-                            </div>
-                        ))}
-                    </div>
-
-                    {extratoImpressao && (
-                        <div id="print-extrato-completo" className="hidden">
-                            <div style={{ textAlign: 'center', marginBottom: '20px' }}>
-                                <h1 style={{ fontSize: '24px', fontWeight: '900', textTransform: 'uppercase' }}>Extrato de Fiado</h1>
-                                <p style={{ fontSize: '12px' }}>Emitido em: {new Date().toLocaleString()}</p>
-                            </div>
-
-                            <div style={{ borderBottom: '2px solid black', paddingBottom: '10px', marginBottom: '10px' }}>
-                                <p><strong>CLIENTE:</strong> {extratoImpressao.cliente?.nome}</p>
-                                <p><strong>TELEFONE:</strong> {extratoImpressao.cliente?.telefone}</p>
-                            </div>
-
-                            <div style={{ marginBottom: '20px' }}>
-                                <p style={{ fontWeight: 'bold', textTransform: 'uppercase', fontSize: '14px', borderBottom: '1px solid #ddd' }}>Lista de Compras</p>
-                                <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '10px' }}>
+                    {aba !== 'clientes' ? (
+                        <>
+                            <input value={filtro} onChange={e => setFiltro(e.target.value)} placeholder="Filtrar por nome do cliente..." className="w-full bg-zinc-900 border border-zinc-800 p-5 rounded-3xl text-white font-bold outline-none mb-8 focus:border-orange-500" />
+                            <div className="bg-zinc-900 rounded-[32px] border border-zinc-800 overflow-hidden">
+                                <table className="w-full text-left text-xs">
                                     <thead>
-                                        <tr style={{ textAlign: 'left', fontSize: '12px', borderBottom: '1px solid black' }}>
-                                            <th>Data/Hora</th>
-                                            <th>Itens</th>
-                                            <th>Pagamento Inicial</th>
-                                            <th style={{ textAlign: 'right' }}>Valor Fiado</th>
+                                        <tr className="border-b border-zinc-800 text-[10px] font-black text-zinc-500 uppercase tracking-widest">
+                                            <th className="p-6">Data/Hora</th>
+                                            <th className="p-6">Cliente</th>
+                                            <th className="p-6">Itens</th>
+                                            <th className="p-6">Valor Fiado</th>
+                                            <th className="p-6">Falta</th>
+                                            <th className="p-6">Status</th>
+                                            <th className="p-6 text-right">Ação</th>
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {extratoImpressao.compras.map(compra => (
-                                            <tr key={compra.id} style={{ fontSize: '11px', borderBottom: '1px solid #eee' }}>
-                                                <td style={{ padding: '6px 0' }}>{new Date(compra.data).toLocaleString()}</td>
-                                                <td>{compra.itens.map(i => i.nome).join(", ")}</td>
-                                                <td>R$ {compra.valorPagoNoAto ? compra.valorPagoNoAto.toFixed(2) : "0.00"}</td>
-                                                <td style={{ textAlign: 'right' }}>R$ {compra.valorFiado.toFixed(2)}</td>
+                                        {filtered.map(h => (
+                                            <tr key={h.id} className="border-b border-zinc-800/50 hover:bg-white/5 transition">
+                                                <td className="p-6 text-zinc-400 font-bold">{new Date(h.data).toLocaleString('pt-BR', {day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit'})}</td>
+                                                <td className="p-6 font-black uppercase italic">{h.cliente}</td>
+                                                <td className="p-6 max-w-[150px] truncate text-zinc-500 font-bold uppercase">{h.itens.map(i => i.nome).join(", ")}</td>
+                                                <td className="p-6 font-black">R$ {h.valorFiado.toFixed(2)}</td>
+                                                <td className="p-6 font-black text-soft-red">R$ {(h.valorFiado - h.valorPago).toFixed(2)}</td>
+                                                <td className="p-6">
+                                                    <span className={`px-3 py-1 rounded-full text-[8px] font-black uppercase ${h.status === 'Pago' ? 'bg-tech-green/20 text-tech-green' : 'bg-orange-500/20 text-orange-500'}`}>
+                                                        {h.status}
+                                                    </span>
+                                                </td>
+                                                <td className="p-6 text-right relative">
+                                                    <button onClick={() => setMenuAberto(menuAberto === h.id ? null : h.id)} className="p-2 hover:bg-zinc-800 rounded-lg"><Icon name="more-horizontal" /></button>
+                                                    {menuAberto === h.id && (
+                                                        <div className="absolute right-6 top-12 bg-zinc-800 border border-zinc-700 rounded-xl shadow-2xl z-50 py-2 w-48 text-left">
+                                                            {h.status !== 'Pago' && (
+                                                                <button onClick={() => {
+                                                                    const val = prompt("Quanto deseja pagar?", (h.valorFiado - h.valorPago).toFixed(2));
+                                                                    if(val) handlePagamento(h.id, val);
+                                                                    setMenuAberto(null);
+                                                                }} className="w-full px-4 py-2 hover:bg-white/5 text-[10px] font-black uppercase text-tech-green flex items-center gap-2"><Icon name="check-circle" size={14}/> Liquidar / Baixa</button>
+                                                            )}
+                                                            <button onClick={() => { prepararImpressao(h); setMenuAberto(null); }} className="w-full px-4 py-2 hover:bg-white/5 text-[10px] font-black uppercase text-white flex items-center gap-2"><Icon name="printer" size={14}/> Imprimir Extrato</button>
+                                                            <button onClick={() => { 
+                                                                alert(`DETALHES DO FIADO:\n\nCliente: ${h.cliente}\nTelefone: ${h.telefone}\nTotal Compra: R$ ${h.valorTotal.toFixed(2)}\nValor em Fiado: R$ ${h.valorFiado.toFixed(2)}\nJá Pago: R$ ${h.valorPago.toFixed(2)}\nFalta: R$ ${(h.valorFiado - h.valorPago).toFixed(2)}\n\nItens: ${h.itens.map(i => i.nome).join(", ")}`);
+                                                                setMenuAberto(null);
+                                                            }} className="w-full px-4 py-2 hover:bg-white/5 text-[10px] font-black uppercase text-zinc-400 flex items-center gap-2"><Icon name="info" size={14}/> Detalhes</button>
+                                                        </div>
+                                                    )}
+                                                </td>
                                             </tr>
                                         ))}
                                     </tbody>
                                 </table>
                             </div>
+                        </>
+                    ) : (
+                        <div className="grid gap-4">
+                            {clientes.map(c => {
+                                const divida = historico
+                                    .filter(h => h.cliente === c.nome && h.status !== 'Pago')
+                                    .reduce((acc, h) => acc + (h.valorFiado - h.valorPago), 0);
+                                return (
+                                    <div key={c.id} className="bg-zinc-900 border border-zinc-800 p-6 rounded-[32px] flex justify-between items-center">
+                                        <div>
+                                            <h3 className="text-xl font-black text-white uppercase italic">{c.nome}</h3>
+                                            <p className="text-zinc-500 text-xs font-bold">{c.telefone}</p>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="text-[10px] font-black text-zinc-500 uppercase">Dívida Total</p>
+                                            <p className={`text-xl font-black ${divida > 0 ? 'text-soft-red' : 'text-tech-green'}`}>R$ {divida.toFixed(2)}</p>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
 
-                            <div style={{ borderTop: '2px solid black', paddingTop: '10px', marginTop: '20px' }}>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-                                    <span>TOTAL EM FIADO:</span>
-                                    <strong>R$ {extratoImpressao.totalFiado.toFixed(2)}</strong>
+                    {extratoImpressao && (
+                        <div id="print-extrato-completo" className="hidden">
+                            <div style={{ textAlign: 'center', marginBottom: '20px', borderBottom: '2px solid black', paddingBottom: '10px' }}>
+                                <h1 style={{ fontSize: '20px', fontWeight: '900', textTransform: 'uppercase' }}>{extratoImpressao.config.nome}</h1>
+                                <p style={{ fontSize: '10px', fontWeight: 'bold' }}>EXTRATO DE FIADO - COMPROVANTE</p>
+                            </div>
+                            <div style={{ fontSize: '12px', lineHeight: '1.6', marginBottom: '15px' }}>
+                                <p><strong>DATA/HORA:</strong> {extratoImpressao.dataImpressao}</p>
+                                <p><strong>CLIENTE:</strong> {extratoImpressao.h.cliente.toUpperCase()}</p>
+                                <p><strong>TELEFONE:</strong> {extratoImpressao.h.telefone}</p>
+                                <p><strong>STATUS:</strong> {extratoImpressao.h.status.toUpperCase()}</p>
+                            </div>
+                            <div style={{ borderY: '1px dashed black', padding: '10px 0', marginBottom: '15px' }}>
+                                <p style={{ fontSize: '10px', fontWeight: '900', marginBottom: '5px' }}>DESCRIÇÃO DOS ITENS</p>
+                                {extratoImpressao.h.itens.map((i, idx) => (
+                                    <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px' }}>
+                                        <span>{i.nome}</span>
+                                        <span>R$ {parseFloat(i.valor).toFixed(2)}</span>
+                                    </div>
+                                ))}
+                            </div>
+                            <div style={{ borderTop: '2px solid black', paddingTop: '10px', fontSize: '12px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                    <span>VALOR TOTAL DA VENDA:</span>
+                                    <span>R$ {extratoImpressao.h.valorTotal.toFixed(2)}</span>
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
-                                    <span>TOTAL PAGO POSTERIOR:</span>
-                                    <strong style={{ color: 'green' }}>R$ {extratoImpressao.totalPago.toFixed(2)}</strong>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#f97316' }}>
+                                    <span>VALOR EM FIADO:</span>
+                                    <strong>R$ {extratoImpressao.h.valorFiado.toFixed(2)}</strong>
                                 </div>
-                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', fontWeight: '900', marginTop: '10px', background: '#f4f4f4', padding: '10px' }}>
-                                    <span>TOTAL RESTANTE:</span>
-                                    <span>R$ {extratoImpressao.totalRestante.toFixed(2)}</span>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', color: '#10b981' }}>
+                                    <span>TOTAL JÁ PAGO:</span>
+                                    <strong>R$ {extratoImpressao.h.valorPago.toFixed(2)}</strong>
                                 </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: '900', marginTop: '10px', borderTop: '1px solid black', paddingTop: '5px' }}>
+                                    <span>FALTA PAGAR:</span>
+                                    <span>R$ {(extratoImpressao.h.valorFiado - extratoImpressao.h.valorPago).toFixed(2)}</span>
+                                </div>
+                            </div>
+                            <div style={{ marginTop: '40px', textAlign: 'center', fontSize: '10px' }}>
+                                <div style={{ borderTop: '1px solid black', width: '200px', margin: '0 auto 5px auto' }}></div>
+                                <p>ASSINATURA DO CLIENTE</p>
                             </div>
                         </div>
                     )}
@@ -994,6 +1026,7 @@
                             <p>DATA: {new Date(venda.data).toLocaleString()}</p>
                             <p>CLIENTE: {venda.cliente}</p>
                             <p>VENDEDOR: {venda.vendedorNome}</p>
+                            <p>TIPO: {venda.isMulti ? 'CAIXA' : 'UNITÁRIO'}</p>
                         </div>
                         <div className="border-y border-black py-2 mb-4">
                             <div className="flex justify-between font-bold">
