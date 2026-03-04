@@ -1,0 +1,1094 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Gestão | Visual Inventory</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap" rel="stylesheet">
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <style>
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background-color: #111111; 
+            color: #ffffff;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .bg-maizena { background-color: #F2C94C; }
+        .text-maizena { color: #F2C94C; }
+        .border-maizena { border-color: #F2C94C; }
+        .bg-tech-green { background-color: #1DB954; }
+        .bg-soft-red { background-color: #E63946; }
+        .bg-soft-orange { background-color: #F4A261; }
+        
+        ::-webkit-scrollbar { width: 6px; }
+        ::-webkit-scrollbar-track { background: #111111; }
+        ::-webkit-scrollbar-thumb { background: #333333; border-radius: 10px; }
+
+        @media print {
+            body * { visibility: hidden; }
+            #receipt-print, #receipt-print *, #print-summary, #print-summary *, #print-meta, #print-meta *, #print-fiado, #print-fiado *, #print-extrato-completo, #print-extrato-completo * { visibility: visible; }
+            #receipt-print, #print-summary, #print-meta, #print-fiado, #print-extrato-completo { 
+                position: absolute; 
+                left: 0; 
+                top: 0; 
+                width: 100%; 
+                color: black !important; 
+                background: white !important; 
+                padding: 20px;
+            }
+            .no-print { display: none !important; }
+        }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const FORMAS_PAGAMENTO = [
+            "Dinheiro", "Pix", "Pix CNPJ", "Crediário Bemol", "Cartão de débito", "Cartão de crédito", "Fiado"
+        ];
+
+        const SENHA_ADM_PADRAO = "91827390";
+
+        const Icon = ({ name, size = 20, className = "" }) => {
+            useEffect(() => { lucide.createIcons(); }, []);
+            return <i data-lucide={name} className={className} style={{ width: size, height: size }}></i>;
+        };
+
+        const App = () => {
+            const [produtos, setProdutos] = useState(JSON.parse(localStorage.getItem('maizena_produtos')) || []);
+            const [vendas, setVendas] = useState(JSON.parse(localStorage.getItem('maizena_vendas')) || []);
+            const [config, setConfig] = useState(JSON.parse(localStorage.getItem('maizena_config')) || { nome: 'MAIZENA CATALOG', logo: '' });
+            const [modal, setModal] = useState({ type: null, data: null });
+            const [abaAtiva, setAbaAtiva] = useState('catalogo');
+            const [funcionarios, setFuncionarios] = useState(JSON.parse(localStorage.getItem('maizena_funcs')) || []);
+            const [userLogado, setUserLogado] = useState(JSON.parse(localStorage.getItem('maizena_sessao')) || null);
+            const [clientesFiado, setClientesFiado] = useState(JSON.parse(localStorage.getItem('maizena_clientes_fiado')) || []);
+            const [historicoFiado, setHistoricoFiado] = useState(JSON.parse(localStorage.getItem('maizena_historico_fiado')) || []);
+            const [carrinhoGlobal, setCarrinhoGlobal] = useState(JSON.parse(localStorage.getItem('maizena_carrinho')) || []);
+
+            useEffect(() => {
+                localStorage.setItem('maizena_produtos', JSON.stringify(produtos));
+                localStorage.setItem('maizena_vendas', JSON.stringify(vendas));
+                localStorage.setItem('maizena_config', JSON.stringify(config));
+                localStorage.setItem('maizena_funcs', JSON.stringify(funcionarios));
+                localStorage.setItem('maizena_sessao', JSON.stringify(userLogado));
+                localStorage.setItem('maizena_clientes_fiado', JSON.stringify(clientesFiado));
+                localStorage.setItem('maizena_historico_fiado', JSON.stringify(historicoFiado));
+                localStorage.setItem('maizena_carrinho', JSON.stringify(carrinhoGlobal));
+            }, [produtos, vendas, config, funcionarios, userLogado, clientesFiado, historicoFiado, carrinhoGlobal]);
+
+            const handleLogin = (id, senha) => {
+                if (id === 'admin' && senha === SENHA_ADM_PADRAO) {
+                    setUserLogado({ id: 'admin', nome: 'Administrador', role: 'admin' });
+                    setAbaAtiva('catalogo');
+                    return true;
+                }
+                const f = funcionarios.find(u => u.id === id && u.senha === senha);
+                if (f) {
+                    setUserLogado({ ...f, role: 'user' });
+                    if (f.permissoes.catalogo) setAbaAtiva('catalogo');
+                    else if (f.permissoes.caixa) setAbaAtiva('caixa');
+                    else setAbaAtiva('resumo');
+                    return true;
+                }
+                alert("Credenciais incorretas");
+                return false;
+            };
+
+            const logout = () => {
+                setUserLogado(null);
+                setAbaAtiva('catalogo');
+            };
+
+            const temAcesso = (modulo) => {
+                if (!userLogado) return false;
+                if (userLogado.role === 'admin') return true;
+                return userLogado.permissoes[modulo];
+            };
+
+            const handleVenda = (id, cliente, pagamento, extraData = null) => {
+                const p = produtos.find(item => item.id === id);
+                if (p.estoque <= 0) return alert("Estoque esgotado!");
+
+                const dataAgora = new Date().toISOString();
+                const novaVenda = {
+                    id: `V-${Date.now()}`,
+                    produtoId: id,
+                    nome: p.nome,
+                    valor: parseFloat(p.valor),
+                    cliente: cliente || "Consumidor",
+                    pagamento: pagamento,
+                    data: dataAgora,
+                    estornada: false,
+                    isMulti: false,
+                    vendedorId: userLogado.id,
+                    vendedorNome: userLogado.nome
+                };
+
+                if(pagamento === "Fiado") {
+                    if(!extraData?.telefone) return alert("Telefone obrigatório para Fiado!");
+                    registrarNoFiado(novaVenda, extraData.telefone, [{forma: 'Fiado', valor: novaVenda.valor}]);
+                }
+
+                setProdutos(produtos.map(item => item.id === id ? { ...item, estoque: item.estoque - 1 } : item));
+                setVendas([...vendas, novaVenda]);
+                setModal({ type: 'cupom', data: novaVenda });
+            };
+
+            const handleFinalizarCaixa = (itensCarrinho, cliente, pagamentosMultiplos, total, vendedor, extraData = null) => {
+                const dataAgora = new Date().toISOString();
+                const novaVendaMaster = {
+                    id: `V-CX-${Date.now()}`,
+                    itens: itensCarrinho,
+                    cliente: cliente || "Consumidor",
+                    pagamentos: pagamentosMultiplos,
+                    total: total,
+                    data: dataAgora,
+                    isMulti: true,
+                    nome: itensCarrinho.map(i => i.nome).join(", "),
+                    valor: total,
+                    pagamento: pagamentosMultiplos.map(p => p.forma).join(" + "),
+                    vendedorId: vendedor.id,
+                    vendedorNome: vendedor.nome
+                };
+
+                const temFiado = pagamentosMultiplos.find(p => p.forma === "Fiado");
+                if(temFiado) {
+                    if(!cliente || !extraData?.telefone) return alert("Nome e Telefone são obrigatórios para vendas com Fiado!");
+                    registrarNoFiado(novaVendaMaster, extraData.telefone, pagamentosMultiplos);
+                }
+
+                let novosProdutos = [...produtos];
+                itensCarrinho.forEach(item => {
+                    novosProdutos = novosProdutos.map(p => p.id === item.id ? { ...p, estoque: p.estoque - 1 } : p);
+                });
+
+                setProdutos(novosProdutos);
+                setVendas([...vendas, novaVendaMaster]);
+                setCarrinhoGlobal([]);
+                setModal({ type: 'cupom', data: novaVendaMaster });
+            };
+
+            const registrarNoFiado = (venda, telefone, pagamentos) => {
+                const valorFiado = pagamentos.filter(p => p.forma === "Fiado").reduce((acc, p) => acc + parseFloat(p.valor), 0);
+                const valorPagoNoAto = pagamentos.filter(p => p.forma !== "Fiado").reduce((acc, p) => acc + parseFloat(p.valor), 0);
+                
+                if(!clientesFiado.find(c => c.nome === venda.cliente)) {
+                    setClientesFiado([...clientesFiado, { id: Date.now(), nome: venda.cliente, telefone: telefone }]);
+                }
+
+                const novoRegistro = {
+                    id: 'F-' + Date.now(),
+                    vendaId: venda.id,
+                    cliente: venda.cliente,
+                    telefone: telefone,
+                    data: venda.data,
+                    valorTotal: venda.valor,
+                    valorFiado: valorFiado,
+                    valorPago: 0,
+                    valorPagoNoAto: valorPagoNoAto,
+                    status: 'Não pago',
+                    itens: venda.isMulti ? venda.itens : [{nome: venda.nome, valor: venda.valor}],
+                    pagamentosOriginais: pagamentos
+                };
+                setHistoricoFiado([...historicoFiado, novoRegistro]);
+            };
+
+            const saveFuncionario = (f) => {
+                if (f.id) {
+                    setFuncionarios(funcionarios.map(item => item.id === f.id ? f : item));
+                } else {
+                    setFuncionarios([...funcionarios, { ...f, id: 'F-' + Date.now() }]);
+                }
+                setModal({ type: null });
+            };
+
+            const adicionarAoCarrinho = (produto) => {
+                if (produto.estoque <= 0) return alert("Produto sem estoque!");
+                setCarrinhoGlobal([...carrinhoGlobal, produto]);
+            };
+
+            const handleAbaCaixaClick = () => {
+                if (carrinhoGlobal.length > 0) {
+                    setModal({ type: 'decisao_carrinho' });
+                } else {
+                    setAbaAtiva('caixa');
+                }
+            };
+
+            if (!userLogado) {
+                return <TelaLogin onLogin={handleLogin} funcionarios={funcionarios} />;
+            }
+
+            return (
+                <div className="max-w-[1400px] mx-auto min-h-screen border-x border-zinc-800 flex flex-col">
+                    <header className="p-6 flex flex-wrap gap-4 justify-between items-center border-b border-zinc-800 bg-[#111111] sticky top-0 z-40">
+                        <div className="flex items-center gap-4">
+                            {config.logo && <img src={config.logo} className="h-12 w-12 object-contain rounded-lg" />}
+                            <div>
+                                <h1 className="text-2xl font-black tracking-tighter text-maizena italic uppercase">{config.nome}</h1>
+                                <p className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">
+                                    {userLogado.nome} • {userLogado.role.toUpperCase()}
+                                </p>
+                            </div>
+                        </div>
+                        
+                        <div className="flex bg-zinc-900 p-1 rounded-2xl border border-zinc-800">
+                            {temAcesso('catalogo') && <button onClick={() => setAbaAtiva('catalogo')} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'catalogo' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Catálogo</button>}
+                            {temAcesso('caixa') && <button onClick={handleAbaCaixaClick} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'caixa' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Caixa {carrinhoGlobal.length > 0 && <span className="bg-soft-red text-white text-[10px] px-2 py-0.5 rounded-full ml-1">{carrinhoGlobal.length}</span>}</button>}
+                            <button onClick={() => setAbaAtiva('fiado')} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'fiado' ? 'bg-orange-500 text-white' : 'text-zinc-500'}`}>📒 Fiado</button>
+                            {temAcesso('resumo') && <button onClick={() => setAbaAtiva('resumo')} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'resumo' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Resumo</button>}
+                            {(temAcesso('metas') || temAcesso('comissao')) && <button onClick={() => setAbaAtiva('metas')} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'metas' ? 'bg-maizena text-black' : 'text-zinc-500'}`}>Metas</button>}
+                            {userLogado.role === 'admin' && <button onClick={() => setAbaAtiva('admin')} className={`px-4 py-2 rounded-xl font-bold transition text-xs ${abaAtiva === 'admin' ? 'bg-white text-black' : 'text-zinc-500'}`}>ADM</button>}
+                            <button onClick={logout} className="px-4 py-2 text-soft-red"><Icon name="log-out" size={18}/></button>
+                        </div>
+
+                        {temAcesso('configuracoes') && (
+                            <button onClick={() => setModal({type: 'novo'})} className="bg-tech-green text-black px-6 py-3 rounded-2xl font-black text-sm flex items-center gap-2 hover:scale-105 transition">
+                                <Icon name="plus" size={18}/> INCLUIR PRODUTO
+                            </button>
+                        )}
+                    </header>
+
+                    <main className="p-6 flex-1">
+                        {abaAtiva === 'catalogo' && (
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-8">
+                                {produtos.map(p => (
+                                    <ProductCard 
+                                        key={p.id} 
+                                        produto={p} 
+                                        podeEditar={temAcesso('configuracoes')}
+                                        onVenda={() => setModal({type: 'venda', data: p})}
+                                        onIncluir={() => setModal({type: 'incluir', data: p})}
+                                        onEstorno={() => setModal({type: 'estorno_lista', data: p})}
+                                        onEdit={() => setModal({type: 'editar', data: p})}
+                                        onAddToCart={() => adicionarAoCarrinho(p)}
+                                        onDelete={() => {
+                                            if(confirm("Deseja remover este produto?")) 
+                                                setProdutos(produtos.filter(item => item.id !== p.id))
+                                        }}
+                                    />
+                                ))}
+                            </div>
+                        )}
+                        {abaAtiva === 'caixa' && <ModuloCaixa produtos={produtos} funcionarios={funcionarios} onFinalizar={handleFinalizarCaixa} clientesFiado={clientesFiado} itensIniciais={carrinhoGlobal} clearIniciais={() => setCarrinhoGlobal([])} />}
+                        {abaAtiva === 'fiado' && <ModuloFiado historico={historicoFiado} setHistorico={setHistoricoFiado} clientes={clientesFiado} setClientes={setClientesFiado} />}
+                        {abaAtiva === 'resumo' && <ResumoDiario vendas={vendas} config={config} user={userLogado} />}
+                        {abaAtiva === 'metas' && <ModuloMetas user={userLogado} vendas={vendas} funcionarios={funcionarios} />}
+                        {abaAtiva === 'admin' && <ModuloADM funcionarios={funcionarios} setFuncionarios={setFuncionarios} onEditFunc={(f) => setModal({type: 'editFunc', data: f})} onAddFunc={() => setModal({type: 'editFunc', data: null})} onConfig={() => setModal({type: 'config'})} />}
+                    </main>
+
+                    {modal.type === 'novo' && <ModalNovo onSave={(n) => { setProdutos([...produtos, {...n, id: Date.now()}]); setModal({type: null}); }} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'editar' && <ModalNovo onSave={(e) => { setProdutos(produtos.map(p => p.id === e.id ? e : p)); setModal({type: null}); }} onClose={() => setModal({type: null})} produtoParaEditar={modal.data} />}
+                    {modal.type === 'venda' && <ModalVenda produto={modal.data} onConfirm={handleVenda} onClose={() => setModal({type: null})} clientesFiado={clientesFiado} />}
+                    {modal.type === 'incluir' && <ModalIncluir produto={modal.data} onConfirm={(id, q) => { setProdutos(produtos.map(p => p.id === id ? {...p, estoque: p.estoque + parseInt(q)} : p)); setModal({type: null}); }} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'cupom' && <ModalCupom venda={modal.data} config={config} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'config' && <ModalConfig config={config} onSave={setConfig} onClose={() => setModal({type: null})} />}
+                    {modal.type === 'decisao_carrinho' && (
+                        <ModalDecisaoCarrinho 
+                            onCancel={() => setModal({type: null})} 
+                            onConfirm={() => { setModal({type: null}); setAbaAtiva('caixa'); }} 
+                        />
+                    )}
+                    {modal.type === 'estorno_lista' && (
+                        <ModalListaEstorno 
+                            produto={modal.data} 
+                            vendas={vendas.filter(v => (v.isMulti ? v.itens.some(i => i.id === modal.data.id) : v.produtoId === modal.data.id) && !v.estornada)}
+                            onConfirm={(vid) => {
+                                const v = vendas.find(x => x.id === vid);
+                                setVendas(vendas.map(x => x.id === vid ? {...x, estornada: true} : x));
+                                if(v.isMulti) {
+                                    let nProd = [...produtos];
+                                    v.itens.forEach(i => nProd = nProd.map(p => p.id === i.id ? {...p, estoque: p.estoque + 1} : p));
+                                    setProdutos(nProd);
+                                } else {
+                                    setProdutos(produtos.map(p => p.id === v.produtoId ? {...p, estoque: p.estoque + 1} : p));
+                                }
+                                setModal({type: null});
+                            }}
+                            onClose={() => setModal({type: null})}
+                        />
+                    )}
+                    {modal.type === 'editFunc' && <ModalFuncionario funcionario={modal.data} onSave={saveFuncionario} onClose={() => setModal({type: null})} />}
+                </div>
+            );
+        };
+
+        const TelaLogin = ({ onLogin, funcionarios }) => {
+            const [id, setId] = useState('');
+            const [senha, setSenha] = useState('');
+            return (
+                <div className="min-h-screen flex items-center justify-center bg-black p-4">
+                    <div className="bg-zinc-900 p-8 rounded-[40px] w-full max-w-md border border-zinc-800 shadow-2xl">
+                        <div className="text-center mb-10">
+                            <h1 className="text-4xl font-black text-maizena italic uppercase tracking-tighter">ACESSO</h1>
+                            <p className="text-zinc-500 font-bold text-xs uppercase tracking-widest mt-2">Identifique-se para continuar</p>
+                        </div>
+                        <div className="space-y-4">
+                            <div>
+                                <label className="text-[10px] font-black text-zinc-500 uppercase block mb-2 ml-1">Usuário / Funcionário</label>
+                                <select value={id} onChange={e => setId(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none">
+                                    <option value="">Selecione...</option>
+                                    <option value="admin">ADMINISTRADOR</option>
+                                    {funcionarios.map(f => <option key={f.id} value={f.id}>{f.nome.toUpperCase()}</option>)}
+                                </select>
+                            </div>
+                            <div>
+                                <label className="text-[10px] font-black text-zinc-500 uppercase block mb-2 ml-1">Senha de Acesso</label>
+                                <input type="password" value={senha} onChange={e => setSenha(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none" />
+                            </div>
+                            <button onClick={() => onLogin(id, senha)} className="w-full bg-maizena text-black py-5 rounded-2xl font-black text-sm uppercase mt-6 hover:scale-[1.02] transition">ENTRAR NO SISTEMA</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModuloADM = ({ funcionarios, setFuncionarios, onEditFunc, onAddFunc, onConfig }) => (
+            <div className="max-w-4xl mx-auto space-y-8">
+                <div className="flex justify-between items-center">
+                    <h2 className="text-3xl font-black italic uppercase text-white">Painel de Controle</h2>
+                    <div className="flex gap-2">
+                        <button onClick={onConfig} className="bg-zinc-800 p-4 rounded-2xl border border-zinc-700 hover:bg-zinc-700"><Icon name="settings"/></button>
+                        <button onClick={onAddFunc} className="bg-maizena text-black px-6 py-4 rounded-2xl font-black text-xs uppercase">+ Novo Funcionário</button>
+                    </div>
+                </div>
+
+                <div className="grid gap-4">
+                    {funcionarios.map(f => (
+                        <div key={f.id} className="bg-zinc-900 border border-zinc-800 p-6 rounded-[32px] flex justify-between items-center">
+                            <div>
+                                <h3 className="font-black text-lg text-white uppercase">{f.nome}</h3>
+                                <div className="flex gap-2 mt-1">
+                                    {Object.entries(f.permissoes).map(([k, v]) => v && (
+                                        <span key={k} className="text-[8px] bg-black text-zinc-500 px-2 py-1 rounded-full font-black uppercase">{k}</span>
+                                    ))}
+                                </div>
+                            </div>
+                            <div className="flex gap-2">
+                                <button onClick={() => onEditFunc(f)} className="p-3 bg-zinc-800 rounded-xl text-white"><Icon name="edit" size={16}/></button>
+                                <button onClick={() => { if(confirm("Excluir?")) setFuncionarios(funcionarios.filter(x => x.id !== f.id)) }} className="p-3 bg-soft-red/20 text-soft-red rounded-xl"><Icon name="trash" size={16}/></button>
+                            </div>
+                        </div>
+                    ))}
+                    {funcionarios.length === 0 && <p className="text-center py-20 text-zinc-600 font-bold uppercase">Nenhum funcionário cadastrado</p>}
+                </div>
+            </div>
+        );
+
+        const ModalFuncionario = ({ funcionario, onSave, onClose }) => {
+            const [f, setF] = useState(funcionario || { 
+                nome: '', senha: '', meta: 0, comissao: 0,
+                permissoes: { catalogo: true, caixa: true, resumo: true, configuracoes: false, metas: true, comissao: false }
+            });
+
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-2xl shadow-2xl relative">
+                        <button onClick={onClose} className="absolute top-6 right-6 text-zinc-500 hover:text-white transition"><Icon name="x" size={24}/></button>
+                        <h2 className="text-2xl font-black mb-8 text-maizena italic uppercase">Gestão de Funcionário</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                            <div className="space-y-4">
+                                <Input label="Nome do Funcionário" value={f.nome} onChange={v => setF({...f, nome: v})} />
+                                <Input label="Senha Individual" type="password" value={f.senha} onChange={v => setF({...f, senha: v})} />
+                                <Input label="Meta Mensal (R$)" type="number" value={f.meta} onChange={v => setF({...f, meta: parseFloat(v)})} />
+                                <Input label="Comissão (%)" type="number" value={f.comissao} onChange={v => setF({...f, comissao: parseFloat(v)})} />
+                            </div>
+                            <div className="bg-black/40 p-6 rounded-3xl border border-zinc-800">
+                                <p className="text-[10px] font-black text-zinc-500 uppercase mb-4 tracking-widest">Permissões de Acesso</p>
+                                <div className="grid grid-cols-1 gap-3">
+                                    {Object.keys(f.permissoes).map(key => (
+                                        <label key={key} className="flex items-center justify-between p-3 bg-zinc-900 rounded-xl cursor-pointer">
+                                            <span className="text-xs font-bold text-white uppercase">{key}</span>
+                                            <input 
+                                                type="checkbox" 
+                                                checked={f.permissoes[key]} 
+                                                onChange={e => setF({...f, permissoes: {...f.permissoes, [key]: e.target.checked}})}
+                                                className="w-5 h-5 accent-maizena"
+                                            />
+                                        </label>
+                                    ))}
+                                </div>
+                            </div>
+                        </div>
+                        <div className="flex gap-4 mt-10">
+                            <button onClick={() => onSave(f)} className="flex-1 bg-tech-green text-black font-black py-4 rounded-2xl uppercase">SALVAR</button>
+                            <button onClick={onClose} className="px-8 text-zinc-500 font-bold">CANCELAR</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModuloMetas = ({ user, vendas, funcionarios }) => {
+            const targets = user.role === 'admin' ? funcionarios : [funcionarios.find(f => f.id === user.id)].filter(Boolean);
+
+            return (
+                <div className="max-w-5xl mx-auto space-y-10">
+                    <div className="flex justify-between items-end">
+                        <div>
+                            <h2 className="text-4xl font-black italic uppercase tracking-tighter">Performance & Metas</h2>
+                            <p className="text-zinc-500 font-bold text-xs uppercase italic">Acompanhamento de resultados</p>
+                        </div>
+                        <button onClick={() => window.print()} className="bg-zinc-800 text-white px-6 py-3 rounded-xl font-black text-xs border border-zinc-700">IMPRIMIR RELATÓRIO</button>
+                    </div>
+
+                    <div id="print-meta" className="grid grid-cols-1 gap-8">
+                        {targets.map(f => {
+                            const totalVendido = vendas
+                                .filter(v => v.vendedorId === f.id && !v.estornada)
+                                .reduce((acc, v) => acc + v.valor, 0);
+                            const porc = Math.min((totalVendido / (f.meta || 1)) * 100, 100);
+                            const comissao = (totalVendido * (f.comissao || 0)) / 100;
+
+                            return (
+                                <div key={f.id} className="bg-zinc-900 border border-zinc-800 p-10 rounded-[40px] shadow-xl">
+                                    <div className="flex flex-wrap justify-between items-start mb-8 gap-4">
+                                        <div>
+                                            <h3 className="text-2xl font-black text-white uppercase italic">{f.nome}</h3>
+                                            <p className="text-zinc-500 font-bold text-[10px] uppercase">Vendedor(a) Responsável</p>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="text-[10px] font-black text-zinc-500 uppercase">Comissão Acumulada</p>
+                                            <p className="text-2xl font-black text-tech-green">R$ {comissao.toFixed(2)}</p>
+                                        </div>
+                                    </div>
+
+                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-8 items-center">
+                                        <div className="col-span-2">
+                                            <div className="flex justify-between mb-3 text-[10px] font-black uppercase tracking-widest">
+                                                <span className="text-zinc-400">Progresso da Meta</span>
+                                                <span className="text-maizena">{porc.toFixed(1)}%</span>
+                                            </div>
+                                            <div className="w-full h-6 bg-black rounded-full overflow-hidden border border-zinc-800">
+                                                <div className="h-full bg-maizena transition-all duration-1000" style={{ width: `${porc}%` }} />
+                                            </div>
+                                            <div className="flex justify-between mt-4">
+                                                <div>
+                                                    <p className="text-[10px] font-black text-zinc-500 uppercase">Já Vendido</p>
+                                                    <p className="text-xl font-black">R$ {totalVendido.toFixed(2)}</p>
+                                                </div>
+                                                <div className="text-right">
+                                                    <p className="text-[10px] font-black text-zinc-500 uppercase">Falta para Meta</p>
+                                                    <p className="text-xl font-black text-soft-orange">R$ {Math.max(f.meta - totalVendido, 0).toFixed(2)}</p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                        <div className="bg-black/50 p-6 rounded-3xl border border-zinc-800 text-center">
+                                            <p className="text-[10px] font-black text-zinc-500 uppercase mb-1">Meta Definida</p>
+                                            <p className="text-3xl font-black text-white">R$ {parseFloat(f.meta || 0).toFixed(2)}</p>
+                                        </div>
+                                    </div>
+                                </div>
+                            );
+                        })}
+                        {targets.length === 0 && <p className="text-center py-20 text-zinc-600 font-bold uppercase italic">Sem dados de metas para exibir</p>}
+                    </div>
+                </div>
+            );
+        };
+
+        const ProductCard = ({ produto, podeEditar, onVenda, onIncluir, onEstorno, onEdit, onDelete, onAddToCart }) => (
+            <div className="bg-maizena rounded-[2.5rem] overflow-hidden h-[500px] relative group shadow-2xl">
+                <img src={produto.imagem || 'https://images.unsplash.com/photo-1523381210434-271e8be1f52b?auto=format&fit=crop&q=80&w=400'} className="w-full h-full object-cover transition duration-500 group-hover:scale-110" />
+                <div className="absolute inset-0 bg-gradient-to-t from-black via-transparent to-transparent opacity-80" />
+                <div className="absolute top-4 left-4">
+                    <button onClick={onAddToCart} className="bg-tech-green p-4 rounded-full text-black shadow-xl hover:scale-110 transition active:scale-95">
+                        <Icon name="shopping-cart" size={24}/>
+                    </button>
+                </div>
+                {podeEditar && (
+                    <div className="absolute top-4 right-4 flex gap-2 opacity-0 group-hover:opacity-100 transition-all">
+                        <button onClick={onEdit} className="bg-black/50 backdrop-blur-md text-white p-2 rounded-full hover:bg-black"><Icon name="edit-3" size={16}/></button>
+                        <button onClick={onDelete} className="bg-soft-red/80 backdrop-blur-md text-white p-2 rounded-full hover:bg-soft-red"><Icon name="x" size={16}/></button>
+                    </div>
+                )}
+                <div className="absolute bottom-0 left-0 right-0 p-6">
+                    <div className="flex justify-between items-end mb-4">
+                        <div className="bg-black/80 backdrop-blur-md p-4 rounded-3xl border border-white/10 max-w-[70%]">
+                            <h3 className="text-white font-bold text-sm leading-tight uppercase tracking-tight truncate">{produto.nome}</h3>
+                            {produto.barcode && <p className="text-[8px] text-zinc-400 font-black uppercase mb-1">CÓD: {produto.barcode}</p>}
+                            <p className="text-maizena font-black text-2xl">R$ {parseFloat(produto.valor).toFixed(2)}</p>
+                            {produto.custo > 0 && <p className="text-[8px] text-white/50 font-bold mt-1">CUSTO: R$ {parseFloat(produto.custo).toFixed(2)}</p>}
+                        </div>
+                        <div className="bg-white p-3 rounded-2xl text-center min-w-[65px] shadow-xl">
+                            <span className="block text-[9px] font-black text-zinc-400 uppercase leading-none mb-1">QTD</span>
+                            <span className="text-black font-black text-xl">{produto.estoque}</span>
+                        </div>
+                    </div>
+                    <div className="flex gap-2 translate-y-2 opacity-0 group-hover:translate-y-0 group-hover:opacity-100 transition-all duration-300">
+                        <button onClick={onVenda} className="flex-1 bg-tech-green text-black font-black py-4 rounded-2xl text-sm flex items-center justify-center gap-2">
+                            <Icon name="shopping-bag" size={18}/> RETIRAR
+                        </button>
+                        <button onClick={onIncluir} className="bg-zinc-900 text-white p-4 rounded-2xl hover:bg-black transition"><Icon name="plus" size={20}/></button>
+                        {podeEditar && <button onClick={onEstorno} className="bg-soft-orange text-black p-4 rounded-2xl hover:bg-orange-400 transition"><Icon name="refresh-ccw" size={20}/></button>}
+                    </div>
+                </div>
+            </div>
+        );
+
+        const ModuloCaixa = ({ produtos, funcionarios, onFinalizar, clientesFiado, itensIniciais = [], clearIniciais }) => {
+            const [busca, setBusca] = useState('');
+            const [carrinho, setCarrinho] = useState(itensIniciais);
+            const [cliente, setCliente] = useState('');
+            const [telefone, setTelefone] = useState('');
+            const [pagamentos, setPagamentos] = useState([]);
+            const [vendedorId, setVendedorId] = useState('');
+            
+            useEffect(() => {
+                if (itensIniciais.length > 0) {
+                    setCarrinho(itensIniciais);
+                    clearIniciais(); 
+                }
+            }, [itensIniciais]);
+
+            const filtrados = busca.length > 1 ? produtos.filter(p => 
+                p.nome.toLowerCase().includes(busca.toLowerCase()) || 
+                (p.barcode && p.barcode === busca)
+            ) : [];
+
+            const total = carrinho.reduce((acc, item) => acc + parseFloat(item.valor), 0);
+            const totalPago = pagamentos.reduce((acc, p) => acc + parseFloat(p.valor || 0), 0);
+            const temFiado = pagamentos.some(p => p.forma === "Fiado");
+
+            const addAoCarrinho = (p) => {
+                if(p.estoque <= 0) return alert("Sem estoque!");
+                setCarrinho([...carrinho, p]);
+                setBusca('');
+            };
+
+            const addPagamento = (forma) => {
+                const resto = total - totalPago;
+                if(resto <= 0) return;
+                setPagamentos([...pagamentos, { forma, valor: resto }]);
+            };
+
+            const selecionarClienteExistente = (c) => {
+                setCliente(c.nome);
+                setTelefone(c.telefone);
+            };
+
+            const processarFinalizacao = () => {
+                if (!vendedorId) return alert("A seleção do vendedor é obrigatória.");
+                if (temFiado && (!cliente || !telefone)) return alert("Para FIADO, Nome e Telefone são obrigatórios!");
+                
+                const vendedorObj = vendedorId === 'admin' 
+                    ? { id: 'admin', nome: 'Administrador' } 
+                    : funcionarios.find(f => f.id === vendedorId);
+                
+                onFinalizar(carrinho, cliente, pagamentos, total, vendedorObj, { telefone });
+                setCarrinho([]);
+                setPagamentos([]);
+            };
+
+            return (
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8 max-w-6xl mx-auto">
+                    <div className="lg:col-span-2 space-y-6">
+                        <div className="bg-zinc-900 p-6 rounded-[32px] border-2 border-dashed border-zinc-800">
+                            <label className="block text-[10px] font-black text-maizena uppercase tracking-widest mb-3">Selecione o Vendedor Responsável *</label>
+                            <select value={vendedorId} onChange={e => setVendedorId(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none focus:border-maizena">
+                                <option value="">ESCOLHER VENDEDOR...</option>
+                                <option value="admin">ADMINISTRADOR</option>
+                                {funcionarios.map(f => <option key={f.id} value={f.id}>{f.nome.toUpperCase()}</option>)}
+                            </select>
+                        </div>
+                        <div className="bg-zinc-900 p-6 rounded-[32px] border border-zinc-800">
+                            <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-3">Pesquisar Produto (Nome ou Código de Barras)</label>
+                            <div className="relative">
+                                <input autoFocus value={busca} onChange={e => setBusca(e.target.value)} placeholder="Digite para buscar..." className="w-full bg-black border border-zinc-800 p-5 rounded-2xl text-white font-bold outline-none focus:border-maizena" />
+                                {filtrados.length > 0 && (
+                                    <div className="absolute top-full left-0 right-0 bg-zinc-900 border border-zinc-800 rounded-2xl mt-2 z-50 overflow-hidden shadow-2xl">
+                                        {filtrados.map(p => (
+                                            <button key={p.id} onClick={() => addAoCarrinho(p)} className="w-full p-4 hover:bg-white/5 flex justify-between items-center border-b border-zinc-800 last:border-0">
+                                                <div className="text-left">
+                                                    <p className="font-bold text-sm uppercase">{p.nome}</p>
+                                                    <p className="text-[10px] text-zinc-500">Estoque: {p.estoque}</p>
+                                                </div>
+                                                <p className="font-black text-maizena">R$ {parseFloat(p.valor).toFixed(2)}</p>
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        </div>
+
+                        {temFiado && (
+                            <div className="bg-orange-950/20 p-6 rounded-[32px] border border-orange-500/30">
+                                <h4 className="text-orange-500 font-black text-xs uppercase mb-4 flex items-center gap-2"><Icon name="info" size={14}/> Dados obrigatórios para Fiado</h4>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                    <input placeholder="Nome Completo do Cliente *" value={cliente} onChange={e => setCliente(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-xl text-white text-xs outline-none focus:border-orange-500" />
+                                    <input placeholder="Telefone de Contato *" value={telefone} onChange={e => setTelefone(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-xl text-white text-xs outline-none focus:border-orange-500" />
+                                </div>
+                                {clientesFiado.length > 0 && (
+                                    <div className="flex gap-2 overflow-x-auto pb-2">
+                                        {clientesFiado.map(c => (
+                                            <button key={c.id} onClick={() => selecionarClienteExistente(c)} className="whitespace-nowrap bg-zinc-800 px-3 py-2 rounded-lg text-[10px] font-bold text-zinc-400 hover:bg-orange-500 hover:text-white transition uppercase">
+                                                {c.nome}
+                                            </button>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        <div className="bg-zinc-900 rounded-[32px] border border-zinc-800 overflow-hidden">
+                            <div className="p-6 border-b border-zinc-800 flex justify-between items-center"><h3 className="font-black italic uppercase text-sm">Itens da Venda</h3></div>
+                            <div className="max-h-[400px] overflow-y-auto">
+                                {carrinho.map((item, idx) => (
+                                    <div key={idx} className="p-4 flex justify-between items-center border-b border-zinc-800/50">
+                                        <div className="flex items-center gap-4">
+                                            <button onClick={() => setCarrinho(carrinho.filter((_, i) => i !== idx))} className="text-soft-red"><Icon name="x-circle" size={18}/></button>
+                                            <span className="font-bold text-xs uppercase">{item.nome}</span>
+                                        </div>
+                                        <span className="font-black text-xs">R$ {parseFloat(item.valor).toFixed(2)}</span>
+                                    </div>
+                                ))}
+                                {carrinho.length === 0 && <p className="p-10 text-center text-zinc-600 font-bold uppercase italic text-xs">Aguardando produtos...</p>}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div className="space-y-6">
+                        <div className="bg-maizena p-8 rounded-[40px] text-black shadow-xl">
+                            <p className="font-black text-[10px] uppercase opacity-60 mb-1">Total</p>
+                            <h3 className="text-5xl font-black tracking-tighter">R$ {total.toFixed(2)}</h3>
+                        </div>
+
+                        <div className="bg-zinc-900 p-6 rounded-[32px] border border-zinc-800">
+                            <div className="grid grid-cols-2 gap-2 mb-6">
+                                {FORMAS_PAGAMENTO.map(f => (
+                                    <button key={f} onClick={() => addPagamento(f)} className={`p-3 border rounded-xl text-[9px] font-black uppercase transition ${f === 'Fiado' ? 'border-orange-500 text-orange-500' : 'bg-black border-zinc-800 text-zinc-400'}`}>{f}</button>
+                                ))}
+                            </div>
+
+                            {pagamentos.map((p, idx) => (
+                                <div key={idx} className="flex gap-2 items-center mb-2">
+                                    <div className={`flex-1 p-3 rounded-xl border flex justify-between items-center ${p.forma === 'Fiado' ? 'bg-orange-500/10 border-orange-500/50' : 'bg-black border-zinc-800'}`}>
+                                        <span className={`text-[10px] font-black uppercase ${p.forma === 'Fiado' ? 'text-orange-500' : 'text-zinc-400'}`}>{p.forma}</span>
+                                        <input type="number" value={p.valor} onChange={e => {
+                                            const n = [...pagamentos];
+                                            n[idx].valor = e.target.value;
+                                            setPagamentos(n);
+                                        }} className="bg-transparent text-right font-black outline-none w-20 text-white" />
+                                    </div>
+                                    <button onClick={() => setPagamentos(pagamentos.filter((_, i) => i !== idx))} className="text-zinc-600"><Icon name="trash" size={16}/></button>
+                                </div>
+                            ))}
+
+                            <div className="mt-4 pt-4 border-t border-zinc-800">
+                                <div className="flex justify-between text-[10px] font-black uppercase mb-4">
+                                    <span className="text-zinc-500">Restante:</span>
+                                    <span className={totalPago < total ? 'text-soft-red' : 'text-tech-green'}>R$ {Math.max(total - totalPago, 0).toFixed(2)}</span>
+                                </div>
+                                <button disabled={totalPago < total || total === 0} onClick={processarFinalizacao} className="w-full bg-tech-green text-black py-4 rounded-2xl font-black text-xs uppercase disabled:opacity-20 hover:scale-105 transition">FINALIZAR VENDA</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalDecisaoCarrinho = ({ onCancel, onConfirm }) => (
+            <div className="fixed inset-0 bg-black/90 z-[100] flex items-center justify-center p-4">
+                <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-sm text-center shadow-2xl">
+                    <div className="w-20 h-20 bg-maizena/20 text-maizena rounded-full flex items-center justify-center mx-auto mb-6">
+                        <Icon name="shopping-cart" size={40} />
+                    </div>
+                    <h2 className="text-xl font-black text-white uppercase italic mb-2">Carrinho Ativo</h2>
+                    <p className="text-zinc-400 text-sm font-bold mb-8 uppercase tracking-widest">Deseja finalizar os itens selecionados e ir para o caixa?</p>
+                    <div className="space-y-3">
+                        <button onClick={onConfirm} className="w-full bg-tech-green text-black py-4 rounded-2xl font-black text-xs uppercase hover:scale-105 transition">Sim, Ir para o Caixa</button>
+                        <button onClick={onCancel} className="w-full bg-zinc-800 text-white py-4 rounded-2xl font-black text-xs uppercase hover:bg-zinc-700 transition">Não, Continuar Comprando</button>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const ModuloFiado = ({ historico, setHistorico, clientes, setClientes }) => {
+            const [aba, setAba] = useState('pendentes');
+            const [filtro, setFiltro] = useState('');
+            const [extratoImpressao, setExtratoImpressao] = useState(null);
+
+            const filtered = historico.filter(h => 
+                (aba === 'pendentes' ? h.status !== 'Pago' : h.status === 'Pago') &&
+                (h.cliente.toLowerCase().includes(filtro.toLowerCase()))
+            );
+
+            const handlePagamento = (id, valor) => {
+                setHistorico(historico.map(h => {
+                    if(h.id === id) {
+                        const novoPago = h.valorPago + parseFloat(valor);
+                        return { 
+                            ...h, 
+                            valorPago: novoPago, 
+                            status: novoPago >= h.valorFiado ? 'Pago' : 'Parcial' 
+                        };
+                    }
+                    return h;
+                }));
+            };
+
+            const prepararImpressao = (clienteNome) => {
+                const clienteObj = clientes.find(c => c.nome === clienteNome);
+                const itensCliente = historico.filter(h => h.cliente === clienteNome);
+                const totalFiado = itensCliente.reduce((acc, h) => acc + h.valorFiado, 0);
+                const totalPago = itensCliente.reduce((acc, h) => acc + h.valorPago, 0);
+                const totalRestante = totalFiado - totalPago;
+                
+                setExtratoImpressao({
+                    cliente: clienteObj,
+                    compras: itensCliente,
+                    totalFiado,
+                    totalPago,
+                    totalRestante
+                });
+                
+                setTimeout(() => {
+                    window.print();
+                    setExtratoImpressao(null);
+                }, 100);
+            };
+
+            return (
+                <div className="max-w-5xl mx-auto">
+                    <div className="flex justify-between items-center mb-10">
+                        <h2 className="text-4xl font-black italic uppercase text-white">Controle de Fiado</h2>
+                        <div className="flex bg-zinc-900 p-1 rounded-2xl border border-zinc-800">
+                            <button onClick={() => setAba('pendentes')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition ${aba === 'pendentes' ? 'bg-orange-500 text-white' : 'text-zinc-500'}`}>Pendentes</button>
+                            <button onClick={() => setAba('pagos')} className={`px-6 py-2 rounded-xl text-[10px] font-black uppercase transition ${aba === 'pagos' ? 'bg-tech-green text-black' : 'text-zinc-500'}`}>Histórico de Pagos</button>
+                        </div>
+                    </div>
+
+                    <input value={filtro} onChange={e => setFiltro(e.target.value)} placeholder="Pesquisar por nome do cliente..." className="w-full bg-zinc-900 border border-zinc-800 p-5 rounded-3xl text-white font-bold outline-none mb-8 focus:border-orange-500" />
+
+                    <div className="grid gap-4">
+                        {filtered.map(h => (
+                            <div key={h.id} className="bg-zinc-900 border border-zinc-800 p-6 rounded-[32px] flex flex-wrap justify-between items-center gap-6">
+                                <div>
+                                    <p className="text-[10px] font-black text-orange-500 uppercase tracking-widest mb-1">{new Date(h.data).toLocaleDateString('pt-BR')} - {new Date(h.data).toLocaleTimeString('pt-BR')}</p>
+                                    <h3 className="text-xl font-black text-white uppercase italic">{h.cliente}</h3>
+                                    <p className="text-zinc-500 text-xs font-bold uppercase">{h.telefone}</p>
+                                </div>
+
+                                <div className="flex-1 min-w-[200px] bg-black/40 p-4 rounded-2xl border border-zinc-800">
+                                    <p className="text-[9px] font-black text-zinc-500 uppercase mb-2">Resumo da Dívida</p>
+                                    <div className="flex justify-between">
+                                        <div>
+                                            <p className="text-[9px] font-bold text-zinc-600 uppercase">Total</p>
+                                            <p className="font-black text-white">R$ {h.valorFiado.toFixed(2)}</p>
+                                        </div>
+                                        <div className="text-center">
+                                            <p className="text-[9px] font-bold text-zinc-600 uppercase">Pago</p>
+                                            <p className="font-black text-tech-green">R$ {h.valorPago.toFixed(2)}</p>
+                                        </div>
+                                        <div className="text-right">
+                                            <p className="text-[9px] font-bold text-zinc-600 uppercase">Restante</p>
+                                            <p className="font-black text-soft-red">R$ {(h.valorFiado - h.valorPago).toFixed(2)}</p>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div className="flex gap-2">
+                                    <button onClick={() => prepararImpressao(h.cliente)} className="p-4 bg-zinc-800 text-white rounded-2xl hover:bg-zinc-700 transition" title="Imprimir Extrato">
+                                        <Icon name="printer" size={20}/>
+                                    </button>
+                                    {h.status !== 'Pago' && (
+                                        <button onClick={() => {
+                                            const val = prompt("Valor do pagamento:", (h.valorFiado - h.valorPago).toFixed(2));
+                                            if(val) handlePagamento(h.id, val);
+                                        }} className="bg-tech-green text-black px-6 py-4 rounded-2xl font-black text-xs uppercase hover:scale-105 transition">Dar Baixa</button>
+                                    )}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    {extratoImpressao && (
+                        <div id="print-extrato-completo" className="hidden">
+                            <div style={{ textAlign: 'center', marginBottom: '20px' }}>
+                                <h1 style={{ fontSize: '24px', fontWeight: '900', textTransform: 'uppercase' }}>Extrato de Fiado</h1>
+                                <p style={{ fontSize: '12px' }}>Emitido em: {new Date().toLocaleString()}</p>
+                            </div>
+
+                            <div style={{ borderBottom: '2px solid black', paddingBottom: '10px', marginBottom: '10px' }}>
+                                <p><strong>CLIENTE:</strong> {extratoImpressao.cliente?.nome}</p>
+                                <p><strong>TELEFONE:</strong> {extratoImpressao.cliente?.telefone}</p>
+                            </div>
+
+                            <div style={{ marginBottom: '20px' }}>
+                                <p style={{ fontWeight: 'bold', textTransform: 'uppercase', fontSize: '14px', borderBottom: '1px solid #ddd' }}>Lista de Compras</p>
+                                <table style={{ width: '100%', borderCollapse: 'collapse', marginTop: '10px' }}>
+                                    <thead>
+                                        <tr style={{ textAlign: 'left', fontSize: '12px', borderBottom: '1px solid black' }}>
+                                            <th>Data/Hora</th>
+                                            <th>Itens</th>
+                                            <th>Pagamento Inicial</th>
+                                            <th style={{ textAlign: 'right' }}>Valor Fiado</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        {extratoImpressao.compras.map(compra => (
+                                            <tr key={compra.id} style={{ fontSize: '11px', borderBottom: '1px solid #eee' }}>
+                                                <td style={{ padding: '6px 0' }}>{new Date(compra.data).toLocaleString()}</td>
+                                                <td>{compra.itens.map(i => i.nome).join(", ")}</td>
+                                                <td>R$ {compra.valorPagoNoAto ? compra.valorPagoNoAto.toFixed(2) : "0.00"}</td>
+                                                <td style={{ textAlign: 'right' }}>R$ {compra.valorFiado.toFixed(2)}</td>
+                                            </tr>
+                                        ))}
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <div style={{ borderTop: '2px solid black', paddingTop: '10px', marginTop: '20px' }}>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                                    <span>TOTAL EM FIADO:</span>
+                                    <strong>R$ {extratoImpressao.totalFiado.toFixed(2)}</strong>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '5px' }}>
+                                    <span>TOTAL PAGO POSTERIOR:</span>
+                                    <strong style={{ color: 'green' }}>R$ {extratoImpressao.totalPago.toFixed(2)}</strong>
+                                </div>
+                                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '18px', fontWeight: '900', marginTop: '10px', background: '#f4f4f4', padding: '10px' }}>
+                                    <span>TOTAL RESTANTE:</span>
+                                    <span>R$ {extratoImpressao.totalRestante.toFixed(2)}</span>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+                </div>
+            );
+        };
+
+        const ResumoDiario = ({ vendas, config, user }) => {
+            const hoje = new Date().toLocaleDateString();
+            const vendasHoje = vendas.filter(v => new Date(v.data).toLocaleDateString() === hoje && !v.estornada);
+            const totalGeral = vendasHoje.reduce((acc, v) => acc + v.valor, 0);
+
+            const porPagamento = FORMAS_PAGAMENTO.map(forma => {
+                const total = vendasHoje.reduce((acc, v) => {
+                    if(v.isMulti) {
+                        const p = v.pagamentos.find(pg => pg.forma === forma);
+                        return acc + (p ? parseFloat(p.valor) : 0);
+                    }
+                    return acc + (v.pagamento === forma ? v.valor : 0);
+                }, 0);
+                return { forma, total };
+            }).filter(p => p.total > 0);
+
+            return (
+                <div className="max-w-4xl mx-auto space-y-8">
+                    <div className="flex justify-between items-end">
+                        <div>
+                            <h2 className="text-3xl font-black italic uppercase">Resumo de Hoje</h2>
+                            <p className="text-zinc-500 font-bold text-xs uppercase italic">{hoje}</p>
+                        </div>
+                        <button onClick={() => window.print()} className="bg-zinc-800 text-white px-6 py-3 rounded-xl font-black text-xs border border-zinc-700">IMPRIMIR FECHAMENTO</button>
+                    </div>
+
+                    <div id="print-summary" className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                        <div className="bg-maizena p-10 rounded-[40px] text-black">
+                            <p className="text-[10px] font-black uppercase opacity-60 mb-1">Total de Vendas</p>
+                            <h3 className="text-6xl font-black tracking-tighter">R$ {totalGeral.toFixed(2)}</h3>
+                            <p className="mt-4 font-bold text-sm uppercase italic">{vendasHoje.length} transações concluídas</p>
+                        </div>
+
+                        <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] flex flex-col justify-center">
+                            <p className="text-[10px] font-black text-zinc-500 uppercase mb-6 tracking-widest">Distribuição Financeira</p>
+                            <div className="space-y-4">
+                                {porPagamento.map(p => (
+                                    <div key={p.forma} className="flex justify-between items-center">
+                                        <span className="text-xs font-bold text-white uppercase">{p.forma}</span>
+                                        <span className="font-black text-tech-green">R$ {p.total.toFixed(2)}</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalNovo = ({ onSave, onClose, produtoParaEditar }) => {
+            const [p, setP] = useState(produtoParaEditar || { nome: '', valor: '', custo: '', estoque: '', barcode: '', imagem: '' });
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-xl shadow-2xl relative">
+                        <button onClick={onClose} className="absolute top-6 right-6 text-zinc-500 hover:text-white transition"><Icon name="x" size={24}/></button>
+                        <h2 className="text-2xl font-black mb-8 text-maizena italic uppercase">Dados do Produto</h2>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            <Input label="Nome do Produto" value={p.nome} onChange={v => setP({...p, nome: v})} />
+                            <Input label="Código de Barras" value={p.barcode} onChange={v => setP({...p, barcode: v})} />
+                            <Input label="Preço de Venda (R$)" type="number" value={p.valor} onChange={v => setP({...p, valor: v})} />
+                            <Input label="Custo (R$)" type="number" value={p.custo} onChange={v => setP({...p, custo: v})} />
+                            <Input label="Estoque Inicial" type="number" value={p.estoque} onChange={v => setP({...p, estoque: v})} />
+                            <Input label="URL da Imagem" value={p.imagem} onChange={v => setP({...p, imagem: v})} />
+                        </div>
+                        <button onClick={() => onSave(p)} className="w-full bg-tech-green text-black font-black py-4 rounded-2xl uppercase mt-8 hover:scale-[1.02] transition">SALVAR PRODUTO</button>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalVenda = ({ produto, onConfirm, onClose, clientesFiado }) => {
+            const [cliente, setCliente] = useState('');
+            const [telefone, setTelefone] = useState('');
+            const [pagamento, setPagamento] = useState('Dinheiro');
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-md shadow-2xl">
+                        <h3 className="text-xl font-black mb-6 uppercase italic text-maizena">Retirada Rápida</h3>
+                        <div className="bg-black/50 p-4 rounded-2xl border border-zinc-800 mb-6">
+                            <p className="text-[10px] text-zinc-500 font-black uppercase mb-1">Produto</p>
+                            <p className="font-bold uppercase">{produto.nome}</p>
+                            <p className="text-2xl font-black text-maizena">R$ {parseFloat(produto.valor).toFixed(2)}</p>
+                        </div>
+                        <div className="space-y-4">
+                            <Input label="Nome do Cliente" value={cliente} onChange={setCliente} />
+                            {pagamento === 'Fiado' && <Input label="Telefone de Contato *" value={telefone} onChange={setTelefone} />}
+                            <div>
+                                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2 ml-1">Forma de Pagamento</label>
+                                <select value={pagamento} onChange={e => setPagamento(e.target.value)} className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none">
+                                    {FORMAS_PAGAMENTO.map(f => <option key={f} value={f}>{f.toUpperCase()}</option>)}
+                                </select>
+                            </div>
+                            <button onClick={() => { onConfirm(produto.id, cliente, pagamento, { telefone }); onClose(); }} className="w-full bg-tech-green text-black font-black py-4 rounded-2xl uppercase mt-4">CONFIRMAR</button>
+                            <button onClick={onClose} className="w-full text-zinc-500 font-bold py-2">CANCELAR</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalIncluir = ({ produto, onConfirm, onClose }) => {
+            const [q, setQ] = useState('1');
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-md shadow-2xl">
+                        <h3 className="text-xl font-black mb-6 uppercase italic text-maizena">Entrada de Estoque</h3>
+                        <p className="font-bold uppercase mb-4 text-zinc-400">{produto.nome}</p>
+                        <Input label="Quantidade a Adicionar" type="number" value={q} onChange={setQ} />
+                        <button onClick={() => onConfirm(produto.id, q)} className="w-full bg-tech-green text-black font-black py-4 rounded-2xl uppercase mt-6">ADICIONAR AO ESTOQUE</button>
+                        <button onClick={onClose} className="w-full text-zinc-500 font-bold py-2 mt-2">CANCELAR</button>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalCupom = ({ venda, config, onClose }) => (
+            <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-md shadow-2xl">
+                    <div id="receipt-print" className="bg-white text-black p-8 rounded-xl font-mono text-xs">
+                        <div className="text-center border-b border-black pb-4 mb-4">
+                            <h2 className="text-xl font-black uppercase italic">{config.nome}</h2>
+                            <p className="text-[10px] font-bold">FECHAMENTO DE VENDA</p>
+                        </div>
+                        <div className="space-y-1 mb-4">
+                            <p>DATA: {new Date(venda.data).toLocaleString()}</p>
+                            <p>CLIENTE: {venda.cliente}</p>
+                            <p>VENDEDOR: {venda.vendedorNome}</p>
+                        </div>
+                        <div className="border-y border-black py-2 mb-4">
+                            <div className="flex justify-between font-bold">
+                                <span>ITEM</span>
+                                <span>VALOR</span>
+                            </div>
+                            {venda.isMulti ? venda.itens.map((i, idx) => (
+                                <div key={idx} className="flex justify-between mt-1">
+                                    <span>{i.nome}</span>
+                                    <span>R$ {parseFloat(i.valor).toFixed(2)}</span>
+                                </div>
+                            )) : (
+                                <div className="flex justify-between mt-1">
+                                    <span>{venda.nome}</span>
+                                    <span>R$ {parseFloat(venda.valor).toFixed(2)}</span>
+                                </div>
+                            )}
+                        </div>
+                        <div className="text-right space-y-1">
+                            {venda.isMulti ? (
+                                <>
+                                    <p className="font-black text-sm">TOTAL: R$ {venda.total.toFixed(2)}</p>
+                                    <div className="pt-2">
+                                        {venda.pagamentos.map((p, idx) => (
+                                            <p key={idx}>{p.forma}: R$ {parseFloat(p.valor).toFixed(2)}</p>
+                                        ))}
+                                    </div>
+                                </>
+                            ) : (
+                                <>
+                                    <p className="font-black text-sm">TOTAL: R$ {venda.valor.toFixed(2)}</p>
+                                    <p>FORMA: {venda.pagamento}</p>
+                                </>
+                            )}
+                        </div>
+                        <div className="mt-8 text-center border-t border-black pt-4">
+                            <p className="font-bold">OBRIGADO PELA PREFERÊNCIA!</p>
+                        </div>
+                    </div>
+                    <div className="grid grid-cols-2 gap-4 mt-8">
+                        <button onClick={() => window.print()} className="bg-white text-black font-black py-4 rounded-2xl uppercase">IMPRIMIR</button>
+                        <button onClick={onClose} className="bg-zinc-800 text-white font-black py-4 rounded-2xl uppercase">FECHAR</button>
+                    </div>
+                </div>
+            </div>
+        );
+
+        const ModalConfig = ({ config, onSave, onClose }) => {
+            const [c, setC] = useState(config);
+            return (
+                <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                    <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-md shadow-2xl">
+                        <h3 className="text-xl font-black mb-6 uppercase italic text-maizena">Configurações do Sistema</h3>
+                        <div className="space-y-4">
+                            <Input label="Nome da Empresa" value={c.nome} onChange={v => setC({...c, nome: v})} />
+                            <Input label="URL da Logo (PNG/JPG)" value={c.logo} onChange={v => setC({...c, logo: v})} />
+                            <button onClick={() => { onSave(c); onClose(); }} className="w-full bg-tech-green text-black font-black py-4 rounded-2xl uppercase mt-4">SALVAR ALTERAÇÕES</button>
+                            <button onClick={onClose} className="w-full text-zinc-500 font-bold py-2">CANCELAR</button>
+                        </div>
+                    </div>
+                </div>
+            );
+        };
+
+        const ModalListaEstorno = ({ produto, vendas, onConfirm, onClose }) => (
+            <div className="fixed inset-0 bg-black/95 z-50 flex items-center justify-center p-4">
+                <div className="bg-zinc-900 border border-zinc-800 p-8 rounded-[40px] w-full max-w-xl shadow-2xl flex flex-col max-h-[90vh]">
+                    <h3 className="text-xl font-black mb-2 uppercase italic text-soft-orange">Histórico de Vendas</h3>
+                    <p className="text-zinc-500 font-bold text-xs uppercase mb-6">{produto.nome}</p>
+                    <div className="flex-1 overflow-y-auto space-y-3 pr-2">
+                        {vendas.map(v => (
+                            <div key={v.id} className="bg-black/50 border border-zinc-800 p-4 rounded-2xl flex justify-between items-center">
+                                <div>
+                                    <p className="text-[10px] font-black text-white uppercase">{v.cliente}</p>
+                                    <p className="text-[10px] text-zinc-500">{new Date(v.data).toLocaleString('pt-BR')}</p>
+                                </div>
+                                <button onClick={() => onConfirm(v.id)} className="bg-soft-orange text-black px-4 py-2 rounded-xl font-black text-xs uppercase hover:bg-white transition">Estornar</button>
+                            </div>
+                        ))}
+                        {vendas.length === 0 && <p className="text-center py-10 text-zinc-600 font-bold uppercase italic">Nenhuma venda ativa.</p>}
+                    </div>
+                    <button onClick={onClose} className="mt-6 py-4 bg-zinc-800 text-white rounded-2xl font-black uppercase">FECHAR</button>
+                </div>
+            </div>
+        );
+
+        const Input = ({ label, type="text", value, onChange, placeholder }) => (
+            <div>
+                <label className="block text-[10px] font-black text-zinc-500 uppercase tracking-widest mb-2 ml-1">{label}</label>
+                <input type={type} value={value} onChange={e => onChange(e.target.value)} placeholder={placeholder} className="w-full bg-black border border-zinc-800 p-4 rounded-2xl text-white font-bold outline-none focus:border-maizena" />
+            </div>
+        );
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
